@@ -72,9 +72,11 @@ my $o_hp        = undef;         # Check hp procurve mem
 my $o_warn      = undef;         # warning level option
 my $o_warnR     = undef;         # warning level for Real memory
 my $o_warnS     = undef;         # warning levels for swap
+my $o_warnT     = undef;         # warning levels for total memory
 my $o_crit      = undef;         # Critical level option
 my $o_critR     = undef;         # critical level for Real memory
 my $o_critS     = undef;         # critical level for swap
+my $o_critT     = undef;         # critical level for total memory
 my $o_perf      = undef;         # Performance data option
 my $o_cache     = undef;         # Include cached memory as used memory
 my $o_buffer    = undef;         # Exclude buffered memory as used memory
@@ -291,12 +293,12 @@ sub check_options {
     if (defined($o_netsnmp)) {
         my @o_warnL = split(/,/, $o_warn);
         my @o_critL = split(/,/, $o_crit);
-        if (($#o_warnL != 1) || ($#o_critL != 1)) {
-            print "2 warnings and critical !\n";
+        if (($#o_warnL < 1) || ($#o_critL < 1) || ($#o_warnL != $#o_critL)) {
+            print "need 2 or 3 values for warnings and critical and the same number of warning and critical values !\n";
             print_usage();
             exit $ERRORS{"UNKNOWN"};
         }
-        for (my $i = 0; $i < 2; $i++) {
+        for (my $i = 0; $i < $#o_warnL; $i++) {
             if (isnnum($o_warnL[$i]) || isnnum($o_critL[$i])) {
                 print "Numeric value for warning or critical !\n";
                 print_usage();
@@ -317,6 +319,10 @@ sub check_options {
         $o_warnS = $o_warnL[1];
         $o_critR = $o_critL[0];
         $o_critS = $o_critL[1];
+        if ($#o_warnL == 2) {
+            $o_warnT = $o_warnL[2];
+            $o_critT = $o_critL[2];
+        }
     }
 
 }
@@ -567,7 +573,7 @@ if (defined($o_netsnmp)) {
         exit $ERRORS{"UNKNOWN"};
     }
 
-    my ($realused, $swapused) = (undef, undef);
+    my ($realused, $swapused, $totalused) = (undef, undef, undef);
     my $totalcachedbuffered = 0;
     if (defined($o_buffer)) {
         $totalcachedbuffered = $$resultat{$nets_ram_buffer};
@@ -576,28 +582,41 @@ if (defined($o_netsnmp)) {
         $totalcachedbuffered = $totalcachedbuffered + $$resultat{$nets_ram_cache};
     }
 
-    $realused = ($$resultat{$nets_ram_total} - ($$resultat{$nets_ram_free} + $totalcachedbuffered))
+    $realused
+        = ($$resultat{$nets_ram_total} == 0)
+        ? 0
+        : ($$resultat{$nets_ram_total} - ($$resultat{$nets_ram_free} + $totalcachedbuffered))
         / $$resultat{$nets_ram_total};
-    if ($$resultat{$nets_ram_total} == 0) { $realused = 0; }
     $swapused
         = ($$resultat{$nets_swap_total} == 0)
         ? 0
         : ($$resultat{$nets_swap_total} - $$resultat{$nets_swap_free}) / $$resultat{$nets_swap_total};
+    $totalused
+        = ($$resultat{$nets_ram_total} + $$resultat{$nets_swap_total} == 0)
+        ? 0
+        : ($$resultat{$nets_ram_total} - ($$resultat{$nets_ram_free} + $totalcachedbuffered)
+           +
+           $$resultat{$nets_swap_total} - $$resultat{$nets_swap_free})
+        / ($$resultat{$nets_ram_total} + $$resultat{$nets_swap_total});
     $realused = round($realused * 100, 0);
     $swapused = round($swapused * 100, 0);
+    $totalused = round($totalused * 100, 0);
     verb(
 "Ram : $$resultat{$nets_ram_free} ($$resultat{$nets_ram_cache} cached, $$resultat{$nets_ram_buffer} buff) / $$resultat{$nets_ram_total} : $realused"
     );
     verb("Swap : $$resultat{$nets_swap_free} / $$resultat{$nets_swap_total} : $swapused");
+    my $total_free = $$resultat{$nets_swap_free} + $$resultat{$nets_ram_free};
+    my $total_total = $$resultat{$nets_ram_total} + $$resultat{$nets_swap_total};
+    verb("Total : ($total_free / $total_total) : $totalused");
 
     my $n_status = "OK";
-    my $n_output = "Ram : " . $realused . "%, Swap : " . $swapused . "% :";
-    if ((($o_critR != 0) && ($o_critR <= $realused)) || (($o_critS != 0) && ($o_critS <= $swapused))) {
-        $n_output .= " > " . $o_critR . ", " . $o_critS;
+    my $n_output = "Ram : " . $realused . "%, Swap : " . $swapused . "%, Total : " . $totalused . "%";
+    if ((($o_critR != 0) && ($o_critR <= $realused)) || (($o_critS != 0) && ($o_critS <= $swapused)) || (($o_critT != 0) && ($o_critT <= $totalused))) {
+        $n_output .= " : > " . $o_critR . "%, " . $o_critS . "%, " . $o_critS . "%";
         $n_status = "CRITICAL";
     } else {
-        if ((($o_warnR != 0) && ($o_warnR <= $realused)) || (($o_warnS != 0) && ($o_warnS <= $swapused))) {
-            $n_output .= " > " . $o_warnR . ", " . $o_warnS;
+        if ((($o_warnR != 0) && ($o_warnR <= $realused)) || (($o_warnS != 0) && ($o_warnS <= $swapused)) || (($o_warnT != 0) && ($o_warnT <= $totalused))) {
+            $n_output .= " : > " . $o_warnR . "%, " . $o_warnS . "%, " . $o_warnT . "%";
             $n_status = "WARNING";
         }
     }
